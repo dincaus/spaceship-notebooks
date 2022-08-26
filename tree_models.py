@@ -68,18 +68,19 @@ def run_xgboost_classifier(
     **xgboost_param
 ):
     train_data_x, train_data_y = train_df[feature_columns], train_df[label_columns]
-    train_x, train_y = train_data_x.to_numpy().astype(np.float32), train_data_y.to_numpy().astype(np.float32)
+    # train_x, train_y = train_data_x.to_numpy().astype(np.float32), train_data_y.to_numpy().astype(np.float32)
 
     model = xgboost_model_predefined or create_xgboost_classifier(**xgboost_param)
     skf = StratifiedKFold(n_splits=number_of_splits, shuffle=shuffle)
 
     training_results = []
-    for train_index, test_index in skf.split(train_x, train_y):
-        model.fit(train_x[train_index], train_y[train_index].ravel())
-        y_predicted = model.predict(train_x[test_index])
-        model_score = model.score(train_x[test_index], train_y[test_index])
-        acc_score = accuracy_score(train_y[test_index], y_predicted)
-        roc_score = roc_auc_score(train_y[test_index], y_predicted)
+    for train_index, test_index in skf.split(train_data_x, train_data_y):
+        model.fit(train_data_x.iloc[train_index], train_data_y.iloc[train_index])
+        y_predicted = model.predict(train_data_x.iloc[test_index])
+
+        model_score = model.score(train_data_x.iloc[test_index], train_data_y.iloc[test_index])
+        acc_score = accuracy_score(train_data_y.iloc[test_index], y_predicted)
+        roc_score = roc_auc_score(train_data_y.iloc[test_index], y_predicted)
 
         training_results.append({
             "accuracy": acc_score,
