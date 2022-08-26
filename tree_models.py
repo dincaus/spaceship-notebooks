@@ -125,6 +125,7 @@ def run_xgboost_classifier_hyperopt(
     feature_columns: List[Text],
     label_columns: List[Text],
     search_space_params: dict,
+    tree_method: Text = "auto",
     number_iterations: int = 100,
     test_size: float = 0.1,
     shuffle: bool = True
@@ -135,12 +136,14 @@ def run_xgboost_classifier_hyperopt(
     train_x, test_x, train_y, test_y = train_test_split(train_x, train_y, test_size=test_size, shuffle=shuffle)
 
     def objective(hyperopt_params: dict):
+        hyperopt_params["tree_method"] = tree_method
         m = create_xgboost_classifier(**hyperopt_params)
         m.fit(train_x, train_y)
 
         return -m.score(test_x, test_y)
 
     print(f"XGBoost Search Space: {search_space_params}")
+    print(f"Tree method: {tree_method}")
     best = fmin(objective, search_space_params, algo=tpe.suggest, max_evals=number_iterations)
 
     return best
