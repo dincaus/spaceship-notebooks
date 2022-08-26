@@ -75,7 +75,7 @@ def run_xgboost_classifier(
 
     training_results = []
     for train_index, test_index in skf.split(train_x, train_y):
-        model.fit(train_x[train_index], train_y[train_index])
+        model.fit(train_x[train_index], train_y[train_index].ravel())
         y_predicted = model.predict(train_x[test_index])
         model_score = model.score(train_x[test_index], train_y[test_index])
         acc_score = accuracy_score(train_y[test_index], y_predicted)
