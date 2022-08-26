@@ -132,8 +132,8 @@ def run_xgboost_classifier_hyperopt(
 ):
 
     train_data_x, train_data_y = train_df[feature_columns], train_df[label_columns]
-    train_x, train_y = train_data_x.to_numpy().astype(np.float32), train_data_y.to_numpy().astype(np.float32)
-    train_x, test_x, train_y, test_y = train_test_split(train_x, train_y, test_size=test_size, shuffle=shuffle)
+    # train_x, train_y = train_data_x.to_numpy().astype(np.float32), train_data_y.to_numpy().astype(np.float32)
+    train_x, test_x, train_y, test_y = train_test_split(train_data_x, train_data_y, test_size=test_size, shuffle=shuffle)
 
     def objective(hyperopt_params: dict):
         hyperopt_params["tree_method"] = tree_method

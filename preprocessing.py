@@ -32,8 +32,14 @@ def expand_cabin(df: pd.DataFrame):
     return result_series
 
 
+def expand_name(df: pd.DataFrame):
+    result_series = df["Name"].str.lower().str.split(" ", 2, expand=True)
+
+    return result_series
+
+
 def expand_passenger_id_to_group(df: pd.DataFrame):
-    return df["PassengerId"].str.split('_', expand=True)[1].astype(int).astype(str)
+    return df["PassengerId"].str.split('_', expand=True)[1].astype(int)
 
 
 def fill_age_column(df: pd.DataFrame):
