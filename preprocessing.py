@@ -43,15 +43,15 @@ def expand_passenger_id_to_group(df: pd.DataFrame):
 
 
 def fill_age_column(df: pd.DataFrame):
-    media_ages_per_passenger_group = {}
+    median_ages_per_passenger_group = {}
     passengers_group = df["PassengerGroup"].unique()
 
     for pg in passengers_group:
-        media_ages_per_passenger_group[pg] = df.loc[df["PassengerGroup"] == pg, ["Age"]].median()[0]
+        median_ages_per_passenger_group[pg] = df.loc[df["PassengerGroup"] == pg, ["Age"]].median()[0]
 
     for index, passenger in df.iterrows():
         if pd.isna(passenger["Age"]):
-            df.at[index, "Age"] = media_ages_per_passenger_group[passenger["PassengerGroup"]]
+            df.at[index, "Age"] = median_ages_per_passenger_group[passenger["PassengerGroup"]]
 
 
 def process_dataset(dataset: pd.DataFrame):

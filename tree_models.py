@@ -5,7 +5,7 @@ from typing import List, Text, Union
 
 from hyperopt import fmin, tpe
 from xgboost import XGBClassifier
-from sklearn.model_selection import StratifiedKFold, RandomizedSearchCV, train_test_split
+from sklearn.model_selection import StratifiedKFold, RandomizedSearchCV, train_test_split, cross_val_score
 from sklearn.ensemble import AdaBoostClassifier, RandomForestClassifier
 from sklearn.metrics import accuracy_score, roc_auc_score
 
@@ -127,21 +127,38 @@ def run_xgboost_classifier_hyperopt(
     label_columns: List[Text],
     search_space_params: dict,
     tree_method: Text = "auto",
+    enable_categorical: bool = False,
     number_iterations: int = 100,
-    test_size: float = 0.1,
+    number_of_splits: int = 3,
     shuffle: bool = True
 ):
 
     train_data_x, train_data_y = train_df[feature_columns], train_df[label_columns]
+    skf = StratifiedKFold(n_splits=number_of_splits, shuffle=shuffle)
     # train_x, train_y = train_data_x.to_numpy().astype(np.float32), train_data_y.to_numpy().astype(np.float32)
-    train_x, test_x, train_y, test_y = train_test_split(train_data_x, train_data_y, test_size=test_size, shuffle=shuffle)
+    # train_x, test_x, train_y, test_y = train_test_split(
+    #     train_data_x,
+    #     train_data_y,
+    #     test_size=test_size,
+    #     shuffle=shuffle
+    # )
 
     def objective(hyperopt_params: dict):
         hyperopt_params["tree_method"] = tree_method
-        m = create_xgboost_classifier(**hyperopt_params)
-        m.fit(train_x, train_y)
+        hyperopt_params["enable_categorical"] = enable_categorical
 
-        return -m.score(test_x, test_y)
+        m = create_xgboost_classifier(**hyperopt_params)
+
+        score_result_sum = 0.0
+        index = 0
+        for train_index, test_index in skf.split(train_data_x, train_data_y):
+            m.fit(train_data_x.iloc[train_index], train_data_y.iloc[train_index])
+
+            score_result = m.score(train_data_x.iloc[test_index], train_data_y.iloc[test_index])
+            score_result_sum += score_result
+            index += 1
+
+        return -(score_result_sum / index)
 
     print(f"XGBoost Search Space: {search_space_params}")
     print(f"Tree method: {tree_method}")
