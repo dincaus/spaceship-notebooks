@@ -27,7 +27,7 @@ def fill_missing_w_mean(df: pd.DataFrame, col_name):
 
 def expand_cabin(df: pd.DataFrame):
     result_series = df["Cabin"].str.split("/", 3, expand=True)
-    result_series[1] = result_series[1].astype(np.float32)
+    result_series[1] = result_series[1].fillna(-1).astype(np.int32)
 
     return result_series
 
