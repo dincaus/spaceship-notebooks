@@ -27,7 +27,7 @@ def fill_missing_w_mean(df: pd.DataFrame, col_name):
 
 def expand_cabin(df: pd.DataFrame):
     result_series = df["Cabin"].str.split("/", 3, expand=True)
-    result_series[1] = result_series[1].fillna(-1).astype(np.int32)
+    result_series[1] = result_series[1].fillna(result_series[1].mode()[0]).astype(np.int32)
 
     return result_series
 
@@ -39,7 +39,7 @@ def expand_name(df: pd.DataFrame):
 
 
 def expand_passenger_id_to_group(df: pd.DataFrame):
-    return df["PassengerId"].str.split('_', expand=True)[1].astype(int)
+    return df["PassengerId"].str.split('_', expand=True)[1].astype(np.int64)
 
 
 def fill_age_column(df: pd.DataFrame):
