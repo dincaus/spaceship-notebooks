@@ -4,8 +4,13 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
+from tabnet import create_tabnet_classifier
+
 from typing import List, Union, Text
 from dataset import dataframe_to_dataset
+
+from hyperopt import fmin, tpe, space_eval
+from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import train_test_split, StratifiedKFold
 
 
@@ -14,14 +19,24 @@ optimizers = tf.keras.optimizers
 losses = tf.keras.losses
 
 
-def create_model_inputs(numerical_features: List[Text], categorical_features: List[Text]):
+def create_model_inputs(
+        numerical_features: List[Text],
+        categorical_features: List[Text],
+        categorical_int_features: Union[None, List[Text]] = None
+):
+
+    if categorical_int_features is None:
+        categorical_int_features = list()
+
     inputs = {}
 
-    for feature in numerical_features + categorical_features:
+    for feature in numerical_features + categorical_features + categorical_int_features:
         if feature in numerical_features:
             inputs[feature] = layers.Input(name=feature, shape=(), dtype=tf.float32)
-        else:
+        elif feature in categorical_features:
             inputs[feature] = layers.Input(name=feature, shape=(), dtype=tf.string)
+        elif feature in categorical_int_features:
+            inputs[feature] = layers.Input(name=feature, shape=(), dtype=tf.int64)
 
     return inputs
 
@@ -64,20 +79,33 @@ def encode_inputs(
         categorical_vocabulary: dict,
         use_embedding=False,
         encoding_size=None,
-        return_as_list: bool = False
+        return_as_list: bool = False,
+        categorical_features_int: Union[None, List[Text]] = None
 ):
     encoded_features = []
 
+    if categorical_features_int is None:
+        categorical_features_int = list()
+
     for feature_name in inputs:
-        if feature_name in categorical_features:
+
+        if feature_name in (categorical_features + categorical_features_int):
             vocabulary = categorical_vocabulary[feature_name]
 
-            lookup = layers.StringLookup(
-                vocabulary=vocabulary,
-                mask_token=None,
-                num_oov_indices=0,
-                output_mode="int" if use_embedding else "binary"
-            )
+            if feature_name not in categorical_features_int:
+                lookup = layers.StringLookup(
+                    vocabulary=vocabulary,
+                    mask_token=None,
+                    num_oov_indices=0,
+                    output_mode="int" if use_embedding else "binary"
+                )
+            else:
+                lookup = layers.IntegerLookup(
+                    vocabulary=vocabulary,
+                    mask_token=None,
+                    num_oov_indices=0,
+                    output_mode="int" if use_embedding else "binary"
+                )
 
             if use_embedding:
                 encoded_feature = lookup(inputs[feature_name])
@@ -145,12 +173,18 @@ def create_classification_model(
 def create_wide_and_deep_model(
     numerical_features,
     categorical_features,
+    categorical_features_int,
     categorical_features_with_vocabulary,
     hidden_units: List[int],
+    encoding_dims: int,
     learning_rate: float,
     dropout_rate: float
 ):
-    inputs = create_model_inputs(numerical_features, categorical_features)
+    inputs = create_model_inputs(
+        numerical_features,
+        categorical_features,
+        categorical_int_features=categorical_features_int
+    )
     wide = encode_inputs(inputs, numerical_features, categorical_features, categorical_features_with_vocabulary)
     wide = layers.BatchNormalization()(wide)
 
@@ -159,7 +193,9 @@ def create_wide_and_deep_model(
         numerical_features,
         categorical_features,
         categorical_features_with_vocabulary,
-        use_embedding=True
+        use_embedding=True,
+        encoding_size=encoding_dims,
+        categorical_features_int=categorical_features_int
     )
 
     for units in hidden_units:
@@ -185,17 +221,27 @@ def create_wide_and_deep_model(
 def create_deep_and_cross_model(
         numerical_features,
         categorical_features,
+        categorical_features_int,
         categorical_features_with_vocabulary,
         hidden_units: List[int],
+        encoding_dims: int,
         learning_rate: float,
         dropout_rate: float
 ):
-    inputs = create_model_inputs(numerical_features, categorical_features)
+    inputs = create_model_inputs(
+        numerical_features,
+        categorical_features,
+        categorical_int_features=categorical_features_int
+    )
+
     x0 = encode_inputs(
-        inputs, numerical_features,
+        inputs,
+        numerical_features,
         categorical_features,
         categorical_features_with_vocabulary,
-        use_embedding=True
+        use_embedding=True,
+        encoding_size=encoding_dims,
+        categorical_features_int=categorical_features_int
     )
 
     cross = x0
@@ -298,15 +344,26 @@ class VariableSelection(layers.Layer):
 def create_grn_and_vsn_model(
         numerical_features,
         categorical_features,
+        categorical_features_int,
         categorical_features_with_vocabulary,
         learning_rate: float = 1e-3,
         dropout_rate: float = 0.15,
         encoding_size: int = 16
 ):
-    inputs = create_model_inputs(numerical_features, categorical_features)
+    inputs = create_model_inputs(
+        numerical_features,
+        categorical_features,
+        categorical_int_features=categorical_features_int
+    )
     feature_list = encode_inputs(
-        inputs, numerical_features, categorical_features, categorical_features_with_vocabulary,
-        use_embedding=True, encoding_size=encoding_size, return_as_list=True
+        inputs,
+        numerical_features,
+        categorical_features,
+        categorical_features_with_vocabulary,
+        categorical_features_int=categorical_features_int,
+        use_embedding=True,
+        encoding_size=encoding_size,
+        return_as_list=True
     )
     num_features = len(feature_list)
 
@@ -328,6 +385,7 @@ def run_grn_and_vsn_model(
         train_df: pd.DataFrame,
         numerical_features,
         categorical_features,
+        categorical_features_int,
         categorical_features_with_vocabulary,
         label_cols,
         epochs: int = 200,
@@ -336,14 +394,14 @@ def run_grn_and_vsn_model(
         encoding_size: int = 16,
         batch_size: int = 256,
         shuffle: bool = True,
-        test_size: float = 0.1,
-        number_of_splits: int = 3
+        test_size: float = 0.1
 ):
     assert train_df is not None, "Train dataframe has to be provided"
 
     model = create_grn_and_vsn_model(
         numerical_features,
         categorical_features,
+        categorical_features_int,
         categorical_features_with_vocabulary,
         learning_rate,
         dropout_rate,
@@ -351,44 +409,39 @@ def run_grn_and_vsn_model(
     )
     print(model.summary())
 
-    train_data, validation_data = train_test_split(train_df, shuffle=shuffle, test_size=test_size)
+    train_data = train_df
 
-    validation_ds = dataframe_to_dataset(
-        validation_data[numerical_features + categorical_features + label_cols],
+    train_data, test_data = train_test_split(
+        train_data[numerical_features + categorical_features + categorical_features_int + label_cols],
+        test_size=test_size,
+        shuffle=shuffle,
+        stratify=train_data[label_cols]
+    )
+    train_ds = dataframe_to_dataset(
+        train_data[numerical_features + categorical_features + categorical_features_int + label_cols],
         label_cols=label_cols
     )
-
-    train_data_x, train_data_y = train_data[numerical_features + categorical_features], train_data[label_cols]
-    skf = StratifiedKFold(n_splits=number_of_splits, shuffle=shuffle)
-
-    result = []
-    for train_idx, test_idx in skf.split(train_data_x, train_data_y):
-        train_ds = dataframe_to_dataset(
-            train_data.iloc[train_idx][numerical_features + categorical_features + label_cols],
-            label_cols=label_cols
+    test_ds = dataframe_to_dataset(
+        test_data[numerical_features + categorical_features + categorical_features_int + label_cols],
+        label_cols=label_cols
+    )
+    callbacks = [
+        tf.keras.callbacks.EarlyStopping(
+            monitor="val_binary_accuracy",
+            patience=10,
+            restore_best_weights=True
         )
-        test_ds = dataframe_to_dataset(
-            train_data.iloc[test_idx][numerical_features + categorical_features + label_cols],
-            label_cols=label_cols
-        )
+    ]
 
-        callbacks = [
-            tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=20, restore_best_weights=True)
-        ]
-        history = model.fit(
-            train_ds.batch(batch_size),
-            epochs=epochs,
-            validation_data=validation_ds,
-            callbacks=callbacks
-        )
-        evaluate_result = model.evaluate(test_ds)
+    history = model.fit(
+        train_ds.batch(batch_size),
+        epochs=epochs,
+        validation_data=test_ds.batch(batch_size),
+        callbacks=callbacks
+    )
+    evaluate_result = model.evaluate(test_ds.batch(batch_size))
 
-        result.append({
-            "history": history.history,
-            "evaluateResult": evaluate_result
-        })
-
-    return model, result
+    return model, [history, evaluate_result]
 
 
 def create_mlp(hidden_units, dropout_rate, activation, normalization_layer, name=None):
@@ -511,12 +564,13 @@ def run_tabtransformer_model(
     )
     print(model.summary())
 
-    train_data, validation_data = train_test_split(train_df, shuffle=shuffle, test_size=test_size)
-
-    validation_ds = dataframe_to_dataset(
-        validation_data[numerical_features + categorical_features + label_cols],
-        label_cols=label_cols
-    )
+    # train_data, validation_data = train_test_split(train_df, shuffle=shuffle, test_size=test_size)
+    #
+    # validation_ds = dataframe_to_dataset(
+    #     validation_data[numerical_features + categorical_features + label_cols],
+    #     label_cols=label_cols
+    # )
+    train_data = train_df
 
     train_data_x, train_data_y = train_data[numerical_features + categorical_features], train_data[label_cols]
     skf = StratifiedKFold(n_splits=number_of_splits, shuffle=shuffle)
@@ -533,15 +587,19 @@ def run_tabtransformer_model(
         )
 
         callbacks = [
-            tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=20, restore_best_weights=True)
+            tf.keras.callbacks.EarlyStopping(
+                monitor="val_loss",
+                patience=10,
+                restore_best_weights=True
+            )
         ]
         history = model.fit(
             train_ds.batch(batch_size),
             epochs=epochs,
-            validation_data=validation_ds,
+            validation_data=test_ds.batch(batch_size),
             callbacks=callbacks
         )
-        evaluate_result = model.evaluate(test_ds)
+        evaluate_result = model.evaluate(test_ds.batch(batch_size))
 
         result.append({
             "history": history.history,
@@ -549,3 +607,279 @@ def run_tabtransformer_model(
         })
 
     return model, result
+
+
+def run_wide_and_deep_model(
+    train_df: pd.DataFrame,
+    numerical_features,
+    categorical_features,
+    categorical_features_int,
+    categorical_features_with_vocabulary,
+    label_cols,
+    hidden_units: List[int],
+    encoding_size: int,
+    learning_rate: float,
+    epochs: int,
+    dropout_rate: float,
+    batch_size: int,
+    test_size: float = 0.1,
+    shuffle: bool = True,
+    resume_model=None
+):
+    assert train_df is not None, "Train dataframe has to be provided"
+
+    model = resume_model or create_wide_and_deep_model(
+        numerical_features,
+        categorical_features,
+        categorical_features_int,
+        categorical_features_with_vocabulary,
+        hidden_units=hidden_units,
+        learning_rate=learning_rate,
+        dropout_rate=dropout_rate,
+        encoding_dims=encoding_size
+    )
+    print(model.summary())
+
+    train_data = train_df
+
+    train_data, test_data = train_test_split(
+        train_data[numerical_features + categorical_features + categorical_features_int + label_cols],
+        test_size=test_size,
+        shuffle=shuffle,
+        stratify=train_data[label_cols]
+    )
+    train_ds = dataframe_to_dataset(
+        train_data[numerical_features + categorical_features + categorical_features_int + label_cols],
+        label_cols=label_cols
+    )
+    test_ds = dataframe_to_dataset(
+        test_data[numerical_features + categorical_features + categorical_features_int + label_cols],
+        label_cols=label_cols
+    )
+
+    callbacks = [
+        tf.keras.callbacks.EarlyStopping(
+            monitor="val_loss",
+            patience=20,
+            restore_best_weights=True
+        )
+    ]
+
+    history = model.fit(
+        train_ds.batch(batch_size),
+        epochs=epochs,
+        validation_data=test_ds.batch(batch_size),
+        callbacks=callbacks
+    )
+    evaluate_result = model.evaluate(test_ds.batch(batch_size))
+
+    return model, [history, evaluate_result]
+
+
+def run_deep_and_cross_model(
+        train_df: pd.DataFrame,
+        numerical_features,
+        categorical_features,
+        categorical_features_int,
+        categorical_features_with_vocabulary,
+        label_cols,
+        hidden_units: List[int],
+        encoding_size: int,
+        learning_rate: float,
+        epochs: int,
+        dropout_rate: float,
+        batch_size: int,
+        test_size: float = 0.1,
+        shuffle: bool = True,
+        resume_model=None
+):
+    assert train_df is not None, "Train dataframe has to be provided"
+
+    model = resume_model or create_deep_and_cross_model(
+        numerical_features,
+        categorical_features,
+        categorical_features_int,
+        categorical_features_with_vocabulary,
+        hidden_units=hidden_units,
+        learning_rate=learning_rate,
+        dropout_rate=dropout_rate,
+        encoding_dims=encoding_size
+    )
+    print(model.summary())
+
+    train_data = train_df
+
+    train_data, test_data = train_test_split(
+        train_data[numerical_features + categorical_features + categorical_features_int + label_cols],
+        test_size=test_size,
+        shuffle=shuffle,
+        stratify=train_data[label_cols]
+    )
+    train_ds = dataframe_to_dataset(
+        train_data[numerical_features + categorical_features + categorical_features_int + label_cols],
+        label_cols=label_cols
+    )
+    test_ds = dataframe_to_dataset(
+        test_data[numerical_features + categorical_features + categorical_features_int + label_cols],
+        label_cols=label_cols
+    )
+
+    callbacks = [
+        tf.keras.callbacks.EarlyStopping(
+            monitor="val_binary_accuracy",
+            patience=10,
+            restore_best_weights=True
+        )
+    ]
+
+    history = model.fit(
+        train_ds.batch(batch_size),
+        epochs=epochs,
+        validation_data=test_ds.batch(batch_size),
+        callbacks=callbacks
+    )
+    evaluate_result = model.evaluate(test_ds.batch(batch_size))
+
+    return model, [history, evaluate_result]
+
+
+def run_tabnet_model(
+    train_df: pd.DataFrame,
+    feature_columns: List[Text],
+    label_cols: List[Text],
+    feature_dim,
+    output_dim,
+    n_step,
+    relaxation_factor,
+    sparsity_coefficient,
+    n_shared,
+    bn_momentum,
+    learning_rate,
+    epochs: int,
+    batch_size: int,
+    test_size: float = 0.1,
+    shuffle: bool = True
+):
+    train_data = train_df
+    train_data, test_data = train_test_split(
+        train_data[feature_columns + label_cols],
+        test_size=test_size,
+        shuffle=shuffle,
+        stratify=train_data[label_cols]
+    )
+
+    train_x, train_y = train_data[feature_columns], train_data[label_cols]
+    test_x, test_y = test_data[feature_columns], test_data[label_cols]
+
+    train_y = tf.keras.utils.to_categorical(train_y, num_classes=2)
+    test_y = tf.keras.utils.to_categorical(test_y, num_classes=2)
+
+    model = create_tabnet_classifier(
+        num_features=train_x.shape[1],
+        output_dim=output_dim,
+        feature_dim=feature_dim,
+        n_step=n_step,
+        relaxation_factor=relaxation_factor,
+        sparsity_coefficient=sparsity_coefficient,
+        n_shared=n_shared,
+        bn_momentum=bn_momentum,
+        learning_rate=learning_rate
+    )
+
+    callbacks = [
+        tf.keras.callbacks.EarlyStopping(
+            monitor="val_loss",
+            patience=30,
+            restore_best_weights=True
+        )
+    ]
+
+    history = model.fit(
+        train_x,
+        train_y,
+        epochs=epochs,
+        batch_size=batch_size,
+        validation_data=(test_x, test_y),
+        callbacks=callbacks,
+        verbose=1
+    )
+    evaluation_result = model.evaluate(test_x, test_y)
+
+    test_y = test_y.argmax(axis=-1)
+    test_predictions, test_imps = model.predict(test_x)
+
+    acc_score = accuracy_score(test_y, test_predictions.argmax(axis=-1))
+    roc_score = roc_auc_score(test_y, test_predictions.argmax(axis=-1))
+
+    return model, [history, evaluation_result, acc_score, roc_score]
+
+
+def run_tabnet_model_hyperopt(
+    train_df: pd.DataFrame,
+    feature_columns: List[Text],
+    label_cols: List[Text],
+    search_space_params: dict,
+    epochs: int = 100,
+    batch_size: int = 256,
+    number_iterations: int = 100,
+    test_size: float = 0.1,
+    shuffle: bool = True,
+    verbose: int = 2
+):
+    train_data = train_df
+    train_data, test_data = train_test_split(
+        train_data[feature_columns + label_cols],
+        test_size=test_size,
+        shuffle=shuffle,
+        stratify=train_data[label_cols]
+    )
+
+    train_x, train_y = train_data[feature_columns], train_data[label_cols]
+    test_x, test_y = test_data[feature_columns], test_data[label_cols]
+
+    train_y = tf.keras.utils.to_categorical(train_y, num_classes=2)
+    test_y = tf.keras.utils.to_categorical(test_y, num_classes=2)
+
+    def objective(hyperopt_params: dict):
+        hyperopt_params["output_dim"] = hyperopt_params["feature_dim"]
+
+        model = create_tabnet_classifier(
+            num_features=train_x.shape[1],
+            **hyperopt_params
+            # output_dim=output_dim,
+            # feature_dim=feature_dim,
+            # n_step=n_step,
+            # relaxation_factor=relaxation_factor,
+            # sparsity_coefficient=sparsity_coefficient,
+            # n_shared=n_shared,
+            # bn_momentum=bn_momentum,
+            # learning_rate=learning_rate
+        )
+        callbacks = [
+            tf.keras.callbacks.EarlyStopping(
+                monitor="val_loss",
+                patience=30,
+                restore_best_weights=True
+            )
+        ]
+
+        model.fit(
+            train_x,
+            train_y,
+            epochs=epochs,
+            batch_size=batch_size,
+            validation_data=(test_x, test_y),
+            callbacks=callbacks,
+            verbose=verbose
+        )
+        test_y_preds = test_y.argmax(axis=-1)
+        test_predictions, test_imps = model.predict(test_x)
+
+        score_result = roc_auc_score(test_y_preds, test_predictions.argmax(axis=-1))
+
+        return -score_result
+
+    print(f"Tabnet Search Space: {search_space_params}")
+    best = fmin(objective, search_space_params, algo=tpe.suggest, max_evals=number_iterations)
+
+    return best, train_data

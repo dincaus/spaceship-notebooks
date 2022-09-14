@@ -3,7 +3,7 @@ import pandas as pd
 
 from typing import List, Text, Union
 
-from hyperopt import fmin, tpe
+from hyperopt import fmin, tpe, space_eval
 from xgboost import XGBClassifier
 from sklearn.model_selection import StratifiedKFold, RandomizedSearchCV, train_test_split, cross_val_score
 from sklearn.ensemble import AdaBoostClassifier, RandomForestClassifier
@@ -15,11 +15,11 @@ def create_xgboost_classifier(**kwargs):
 
 
 def create_ada_boost_classifier(
-    base_estimator=None,
-    n_estimators=50,
-    learning_rate=1.0,
-    algorithm="SAMME.R",
-    random_state=None
+        base_estimator=None,
+        n_estimators=50,
+        learning_rate=1.0,
+        algorithm="SAMME.R",
+        random_state=None
 ):
     return AdaBoostClassifier(
         base_estimator=base_estimator,
@@ -31,17 +31,17 @@ def create_ada_boost_classifier(
 
 
 def create_random_forest_classifier(
-    n_estimators=100,
-    criterion="gini",
-    max_depth=None,
-    min_samples_split=2,
-    min_samples_leaf=1,
-    min_weight_fraction_leaf=0.0,
-    max_features="sqrt",
-    max_leaf_nodes=None,
-    min_impurity_decrease=0.0,
-    bootstrap=True,
-    ccp_alpha=0.0
+        n_estimators=100,
+        criterion="gini",
+        max_depth=None,
+        min_samples_split=2,
+        min_samples_leaf=1,
+        min_weight_fraction_leaf=0.0,
+        max_features="sqrt",
+        max_leaf_nodes=None,
+        min_impurity_decrease=0.0,
+        bootstrap=True,
+        ccp_alpha=0.0
 ):
     return RandomForestClassifier(
         n_estimators=n_estimators,
@@ -59,13 +59,13 @@ def create_random_forest_classifier(
 
 
 def run_xgboost_classifier(
-    train_df: pd.DataFrame,
-    feature_columns: List[Text],
-    label_columns: List[Text],
-    number_of_splits=5,
-    shuffle: bool = True,
-    xgboost_model_predefined=None,
-    **xgboost_param
+        train_df: pd.DataFrame,
+        feature_columns: List[Text],
+        label_columns: List[Text],
+        number_of_splits=5,
+        shuffle: bool = True,
+        xgboost_model_predefined=None,
+        **xgboost_param
 ):
     train_data_x, train_data_y = train_df[feature_columns], train_df[label_columns]
     # train_x, train_y = train_data_x.to_numpy().astype(np.float32), train_data_y.to_numpy().astype(np.float32)
@@ -92,14 +92,14 @@ def run_xgboost_classifier(
 
 
 def run_xgboost_classifier_search_cv(
-    train_df: pd.DataFrame,
-    feature_columns: List[Text],
-    label_columns: List[Text],
-    param_distributions: dict,
-    scoring: Text = "roc_auc",
-    number_iterations: int = 100,
-    number_of_splits=5,
-    shuffle: bool = True
+        train_df: pd.DataFrame,
+        feature_columns: List[Text],
+        label_columns: List[Text],
+        param_distributions: dict,
+        scoring: Text = "roc_auc",
+        number_iterations: int = 100,
+        number_of_splits=5,
+        shuffle: bool = True
 ):
     train_data_x, train_data_y = train_df[feature_columns], train_df[label_columns]
     train_x, train_y = train_data_x.to_numpy().astype(np.float32), train_data_y.to_numpy().astype(np.float32)
@@ -122,49 +122,46 @@ def run_xgboost_classifier_search_cv(
 
 
 def run_xgboost_classifier_hyperopt(
-    train_df: pd.DataFrame,
-    feature_columns: List[Text],
-    label_columns: List[Text],
-    search_space_params: dict,
-    tree_method: Text = "auto",
-    enable_categorical: bool = False,
-    number_iterations: int = 100,
-    number_of_splits: int = 3,
-    shuffle: bool = True
+        train_df: pd.DataFrame,
+        feature_columns: List[Text],
+        label_columns: List[Text],
+        search_space_params: dict,
+        tree_method: Text = "auto",
+        enable_categorical: bool = False,
+        number_iterations: int = 100,
+        test_size: float = 0.1,
+        shuffle: bool = True
 ):
+    train_data, test_data = train_test_split(
+        train_df,
+        test_size=test_size,
+        shuffle=shuffle,
+        stratify=train_df[label_columns]
+    )
 
-    train_data_x, train_data_y = train_df[feature_columns], train_df[label_columns]
-    skf = StratifiedKFold(n_splits=number_of_splits, shuffle=shuffle)
-    # train_x, train_y = train_data_x.to_numpy().astype(np.float32), train_data_y.to_numpy().astype(np.float32)
-    # train_x, test_x, train_y, test_y = train_test_split(
-    #     train_data_x,
-    #     train_data_y,
-    #     test_size=test_size,
-    #     shuffle=shuffle
-    # )
+    print(f"Size of train: {train_data.shape[0]}")
+    print(f"Size of test: {test_data.shape[0]}")
+
+    _, count_labels = np.unique(test_data[label_columns].to_numpy(), return_counts=True)
+
+    print(f"Count of labels in the test: {count_labels}")
 
     def objective(hyperopt_params: dict):
         hyperopt_params["tree_method"] = tree_method
         hyperopt_params["enable_categorical"] = enable_categorical
 
         m = create_xgboost_classifier(**hyperopt_params)
+        m.fit(train_data[feature_columns], train_data[label_columns])
 
-        score_result_sum = 0.0
-        index = 0
-        for train_index, test_index in skf.split(train_data_x, train_data_y):
-            m.fit(train_data_x.iloc[train_index], train_data_y.iloc[train_index])
+        score_result = m.score(test_data[feature_columns], test_data[label_columns])
 
-            score_result = m.score(train_data_x.iloc[test_index], train_data_y.iloc[test_index])
-            score_result_sum += score_result
-            index += 1
-
-        return -(score_result_sum / index)
+        return -score_result
 
     print(f"XGBoost Search Space: {search_space_params}")
     print(f"Tree method: {tree_method}")
     best = fmin(objective, search_space_params, algo=tpe.suggest, max_evals=number_iterations)
 
-    return best
+    return best, train_data
 
 
 def run_random_forest_classifier(
@@ -207,13 +204,13 @@ def run_random_forest_classifier(
 
 
 def run_ada_boost_classifier(
-    train_df: pd.DataFrame,
-    feature_columns: List[Text],
-    label_columns: List[Text],
-    number_estimators=100,
-    learning_rate=1.0,
-    number_of_splits=10,
-    shuffle: bool = True
+        train_df: pd.DataFrame,
+        feature_columns: List[Text],
+        label_columns: List[Text],
+        number_estimators=100,
+        learning_rate=1.0,
+        number_of_splits=10,
+        shuffle: bool = True
 ):
     train_data_x, train_data_y = train_df[feature_columns], train_df[label_columns]
     train_x, train_y = train_data_x.to_numpy().astype(np.float32), train_data_y.to_numpy().astype(np.float32)
